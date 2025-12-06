@@ -1,0 +1,85 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-service
+  namespace: buglab
+  labels:
+    app: order-service
+    team: orders
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: order-service
+  template:
+    metadata:
+      labels:
+        app: order-service
+    spec:
+      containers:
+      - name: order-service
+        image: python:3.11-slim
+        # BUG: Liveness probe fails because app takes 60s to start
+        # but probe starts after only 5s with 3 failures = killed at 35s
+        command:
+          - python
+          - -c
+          - |
+            import time
+            import http.server
+            import socketserver
+
+            print("Starting order-service...")
+            print("Initializing (takes 60 seconds)...")
+            time.sleep(60)  # Slow startup - probe will fail before this completes
+            print("Ready to serve!")
+
+            class Handler(http.server.SimpleHTTPRequestHandler):
+                def do_GET(self):
+                    if self.path == "/health":
+                        self.send_response(200)
+                        self.end_headers()
+                        self.wfile.write(b"OK")
+                    else:
+                        self.send_response(404)
+                        self.end_headers()
+
+            with socketserver.TCPServer(("", 8080), Handler) as httpd:
+                httpd.serve_forever()
+        ports:
+        - containerPort: 8080
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "200m"
+        # BUG: initialDelaySeconds too short for 60s startup time
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5   # BUG: Should be 60+
+          periodSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5   # BUG: Should be 60+
+          periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: order-service
+  namespace: buglab
+spec:
+  selector:
+    app: order-service
+  ports:
+  - port: 80
+    targetPort: 8080
+  type: ClusterIP
+# FIX: Increase initialDelaySeconds to 70 or add startupProbe

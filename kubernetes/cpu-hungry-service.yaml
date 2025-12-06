@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cpu-hungry-service
+  namespace: buglab
+  labels:
+    app: cpu-hungry-service
+    team: compute
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cpu-hungry-service
+  template:
+    metadata:
+      labels:
+        app: cpu-hungry-service
+    spec:
+      containers:
+      - name: cpu-hungry-service
+        image: python:3.11-slim
+        # BUG: CPU-intensive task with low CPU limits causes throttling
+        command:
+          - python
+          - -c
+          - |
+            import time
+            import math
+
+            print("Starting cpu-hungry-service...")
+
+            def cpu_intensive_task():
+                # Simulate heavy computation
+                result = 0
+                for i in range(1000000):
+                    result += math.sqrt(i) * math.sin(i)
+                return result
+
+            while True:
+                print("Processing heavy computation...")
+                start = time.time()
+                cpu_intensive_task()
+                elapsed = time.time() - start
+                print(f"Computation took {elapsed:.2f}s (throttled if > 5s)")
+                time.sleep(1)
+        ports:
+        - containerPort: 8080
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "10m"    # BUG: Way too low for CPU-intensive work
+          limits:
+            memory: "128Mi"
+            cpu: "50m"    # BUG: Will cause heavy throttling
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cpu-hungry-service
+  namespace: buglab
+spec:
+  selector:
+    app: cpu-hungry-service
+  ports:
+  - port: 80
+    targetPort: 8080
+  type: ClusterIP
+# FIX: Increase CPU limits to at least 500m or 1 core
